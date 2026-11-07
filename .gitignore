@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime data written by the app (database journals, caches)
+data/snow.db-wal
+data/snow.db-shm
+data/*.tmp
+data/plow_sources.json
+data/boundaries/

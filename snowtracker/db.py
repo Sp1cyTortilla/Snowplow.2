@@ -129,6 +129,17 @@ def zip_detail(zip_code: str):
     return out
 
 
+def snow_grid() -> list[list]:
+    """[[lat, lon, snowfall_24h_in, snowfall_1h_in], ...] for every tracked cell with data."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT c.lat, c.lon, l.snowfall_24h_in, l.snowfall_1h_in "
+            "FROM cells c JOIN zips z USING(cell_id) JOIN latest l USING(cell_id) "
+            "WHERE z.state IN (%s)" % ",".join("?" * len(config.STATES)), config.STATES,
+        ).fetchall()
+    return [[r[0], r[1], r[2], r[3]] for r in rows]
+
+
 def status():
     with connect() as conn:
         r = conn.execute("SELECT MAX(fetched_at) AS last, COUNT(*) AS cells FROM latest").fetchone()

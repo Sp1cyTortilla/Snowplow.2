@@ -1,0 +1,17 @@
+services:
+  snowtracker:
+    build: .
+    image: snowtracker:latest
+    container_name: snowtracker
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    # Run as your own user so files written to ./data stay owned by you
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./data:/app/data
+    environment:
+      SNOW_STATES: "MI"            # comma-separated state codes, e.g. "MI,WI,MN"
+      SNOW_GRID_DEG: "0.15"
+      SNOW_POLL_SECONDS: "7200"
+      SNOW_HISTORY_DAYS: "30"

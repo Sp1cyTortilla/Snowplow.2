@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Snowfall Tracker</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -20,11 +20,13 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  #app { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
-    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
-  h1 { font-size: 16px; margin: 0; font-weight: 650; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
+  .search { display: flex; gap: 6px; padding: 6px; }
+  /* bottom-left corner: zoom buttons, then search to their right */
+  .leaflet-bottom.leaflet-left { display: flex; align-items: flex-end; }
+  .leaflet-bottom.leaflet-left .leaflet-control-zoom { order: 0; }
+  .leaflet-bottom.leaflet-left .search { order: 1; }
+  .leaflet-bottom { padding-bottom: env(safe-area-inset-bottom); }
   select, input, button { font: inherit; color: var(--text); background: var(--bg);
     border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
   button { cursor: pointer; }
@@ -36,22 +38,27 @@
   #map { flex: 1; }
   .legend { background: var(--panel); color: var(--text); padding: 8px 10px; border-radius: 8px;
     border: 1px solid var(--border); font-size: 12px; line-height: 1.6; }
-  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+  .key i { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
     margin-right: 6px; vertical-align: -2px; border: 1px solid #0003; }
-  .leaflet-popup-content { margin: 10px 12px; min-width: 240px; }
-  .pop h3 { margin: 0 0 2px; font-size: 14px; }
-  .pop .sub { color: #5b6878; font-size: 12px; margin-bottom: 6px; }
-  .pop table { border-collapse: collapse; width: 100%; font-size: 12px; }
-  .pop td { padding: 1px 0; } .pop td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-  .pop svg { display: block; margin-top: 8px; }
-  .pop .cap { font-size: 11px; color: #5b6878; display: flex; justify-content: space-between; }
+  .leaflet-control-attribution { font-size: 9px; opacity: .7; }
+
+  [hidden] { display: none !important; }
+  /* ---------- phones ---------- */
+  @media (max-width: 600px) {
+
+    #status { font-size: 11px; }
+    #search input { width: 92px; }
+    .key { padding: 4px 7px; font-size: 10px; line-height: 1.5; }
+    .key i { width: 9px; height: 9px; margin-right: 4px; }
+    /* 16px stops iOS from zooming in when a field is focused; 40px = tappable */
+    select, input, button { font-size: 16px; min-height: 40px; }
+    .leaflet-control-attribution { font-size: 9px; max-width: 100vw; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
-  <header>
-    <h1>❄ Snowfall Tracker</h1>
-    <div class="controls">
+  <div hidden>
       <label>Show
         <select id="metric">
           <option value="snowfall_24h_in">Snowfall, past 24h</option>
@@ -60,13 +67,12 @@
           <option value="snow_depth_in">Snow depth</option>
         </select>
       </label>
-      <form id="search" style="display:flex;gap:6px">
-        <input id="zip" placeholder="Zip code" inputmode="numeric" maxlength="5">
-        <button>Go</button>
-      </form>
-    </div>
     <div id="status"><span class="dot" id="dot"></span><span id="statusText">Connecting…</span></div>
-  </header>
+  </div>
+  <form id="search" class="legend search">
+    <input id="zip" placeholder="Zip code" inputmode="numeric" maxlength="5" aria-label="Zip code">
+    <button>Go</button>
+  </form>
   <div id="map"></div>
 </div>
 <script>
@@ -77,27 +83,40 @@ const SCALES = {
   snow_depth_in:   [0.5, 2, 6, 12, 24],
 };
 const COLORS = ['#c7dcf0', '#8fbde6', '#4f93d6', '#2c5fb8', '#5b2fa6', '#a51d6e'];
-const NONE = '#9aa5b1';
 
-const map = L.map('map', { preferCanvas: true }).setView([44.6, -85.5], 7);
+const isTouch = matchMedia('(pointer: coarse)').matches;
+const isPhone = () => matchMedia('(max-width: 600px)').matches;
+const map = L.map('map', { preferCanvas: true, zoomControl: false, zoomSnap: 0.1,
+  renderer: L.canvas({ tolerance: isTouch ? 10 : 0 }) }).setView([44.6, -85.5], 7);
+L.control.zoom({ position: 'bottomleft' }).addTo(map);
+const searchCtl = L.control({ position: 'bottomleft' });
+searchCtl.onAdd = () => {
+  const el = document.getElementById('search');
+  L.DomEvent.disableClickPropagation(el);
+  L.DomEvent.disableScrollPropagation(el);
+  return el;
+};
+searchCtl.addTo(map);
+map.attributionControl.setPrefix(false);   // drop the "Leaflet" link; OSM credit is required
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | Snow data: Open-Meteo | Zips: GeoNames',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Open-Meteo · GeoNames · Census',
   maxZoom: 19,
 }).addTo(map);
 
 const layer = L.layerGroup().addTo(map);
+// Zip dots only show once zoomed in this far (at state level they're just clutter).
+const DOTS_MIN_ZOOM = 9;
+function updateDots() {
+  const show = map.getZoom() >= DOTS_MIN_ZOOM;
+  if (show && !map.hasLayer(layer)) layer.addTo(map);
+  if (!show && map.hasLayer(layer)) map.removeLayer(layer);
+}
+map.on('zoomend', updateDots);
+updateDots();
 const highlight = L.layerGroup().addTo(map);   // searched zip outline
 const markers = new Map();
 let rows = [];
 const metricSel = document.getElementById('metric');
-
-function colorFor(v, metric) {
-  if (v == null) return NONE;
-  if (v <= 0) return null;               // nothing falling: draw faint
-  const s = SCALES[metric];
-  let i = 0; while (i < s.length && v >= s[i]) i++;
-  return COLORS[i];
-}
 
 const fmt = v => v == null ? '—' : `${v.toFixed(2)} in`;
 
@@ -105,70 +124,36 @@ function render() {
   const metric = metricSel.value;
   for (const r of rows) {
     const v = r[metric];
-    const c = colorFor(v, metric);
-    const style = c
-      ? { radius: 6, color: '#0004', weight: 1, fillColor: c, fillOpacity: 0.85 }
-      : { radius: 3, color: '#0002', weight: 1, fillColor: '#ffffff', fillOpacity: 0.35 };
+    // plain dots: the snow color layer (snow.js) shows the amounts
+    const style = { radius: 3, color: '#33415599', weight: 1, fillColor: '#ffffff', fillOpacity: 0.9 };
     let m = markers.get(r.zip);
     if (!m) {
       m = L.circleMarker([r.lat, r.lon], style).addTo(layer);
-      m.on('click', () => openZip(r.zip));
+      m.on('click', () => showBoundary(r.zip, [r.lat, r.lon]));
       markers.set(r.zip, m);
     } else m.setStyle(style);
     m.bindTooltip(`${r.zip} ${r.place}: ${fmt(v)}`);
   }
-  renderLegend(metric);
+  renderKey(metric);
 }
 
-const legend = L.control({ position: 'bottomright' });
-legend.onAdd = () => L.DomUtil.create('div', 'legend');
-legend.addTo(map);
-function renderLegend(metric) {
+// Color key
+const key = L.control({ position: 'bottomright' });
+key.onAdd = () => L.DomUtil.create('div', 'legend key');
+key.addTo(map);
+function renderKey(metric) {
   const s = SCALES[metric];
-  let html = `<b>${metricSel.selectedOptions[0].text}</b><br>`;
-  html += `<i style="background:#fff8"></i>none<br>`;
+  let html = `<div><i style="background:#fff8"></i>none</div>`;
   for (let i = 0; i < s.length; i++)
-    html += `<i style="background:${COLORS[i]}"></i>${s[i]}${s[i + 1] ? '–' + s[i + 1] : '+'} in<br>`;
-  legend.getContainer().innerHTML = html;
+    html += `<div><i style="background:${COLORS[i]}"></i>${s[i]}${s[i + 1] ? '–' + s[i + 1] : '+'} in</div>`;
+  key.getContainer().innerHTML = html;
 }
 
-function sparkline(hourly) {
-  if (!hourly?.length) return '';
-  const W = 260, H = 70, n = hourly.length, bw = W / n;
-  const max = Math.max(0.1, ...hourly.map(h => h[1] || 0));
-  const nowIso = new Date().toISOString().slice(0, 13);
-  let nowX = null, bars = '';
-  hourly.forEach(([t, v], i) => {
-    const h = ((v || 0) / max) * (H - 12);
-    const future = t.slice(0, 13) > nowIso;
-    if (nowX === null && future) nowX = i * bw;
-    bars += `<rect x="${i * bw}" y="${H - h}" width="${Math.max(bw - 0.5, 0.5)}" height="${h}"
-      fill="${future ? '#8fbde6' : '#2c5fb8'}"><title>${t}Z: ${(v || 0).toFixed(2)} in</title></rect>`;
-  });
-  const line = nowX !== null ? `<line x1="${nowX}" x2="${nowX}" y1="0" y2="${H}" stroke="#d97706" stroke-dasharray="3 2"/>` : '';
-  return `<svg width="${W}" height="${H}" role="img" aria-label="Hourly snowfall">${bars}${line}
-    <text x="2" y="10" font-size="10" fill="#5b6878">max ${max.toFixed(2)} in/hr</text></svg>
-    <div class="cap"><span>past 24h</span><span>now</span><span>next 48h</span></div>`;
-}
-
-async function openZip(zip) {
-  const res = await fetch(`/api/zip/${zip}`);
-  if (!res.ok) { alert(`Zip ${zip} isn't tracked.`); return; }
-  const d = await res.json();
-  const html = `<div class="pop"><h3>${d.zip} · ${d.place}</h3>
-    <div class="sub">${d.county} County, ${d.state} · model hour ${d.model_time ?? '—'}Z</div>
-    <table>
-      <tr><td>Snowfall past 24h</td><td>${fmt(d.snowfall_24h_in)}</td></tr>
-      <tr><td>Snowfall last hour</td><td>${fmt(d.snowfall_1h_in)}</td></tr>
-      <tr><td>Forecast next 24h</td><td>${fmt(d.forecast_24h_in)}</td></tr>
-      <tr><td>Snow depth</td><td>${fmt(d.snow_depth_in)}</td></tr>
-    </table>${sparkline(d.hourly)}</div>`;
-  L.popup().setLatLng([d.lat, d.lon]).setContent(html).openOn(map);
-}
 
 async function load() {
   rows = await (await fetch('/api/zips')).json();
   render();
+  window.snowLayer?.refresh();
   const s = await (await fetch('/api/status')).json();
   document.getElementById('statusText').textContent = s.last_update
     ? `${s.zips} zips · updated ${new Date(s.last_update).toLocaleTimeString()}`
@@ -182,22 +167,40 @@ async function showBoundary(zip, fallback) {
     if (res.ok) {
       const shape = L.geoJSON(await res.json(), {
         interactive: false,
-        style: { color: '#d97706', weight: 3, fillColor: '#fbbf24', fillOpacity: 0.12 },
+        style: { color: '#d97706', weight: 3, fill: false },
       }).addTo(highlight);
-      map.fitBounds(shape.getBounds(), { padding: [40, 40], maxZoom: 15 });
+      // keep the zip clear of the color key in the bottom-right corner
+      const box = key.getContainer().parentElement.getBoundingClientRect();
+      const size = map.getSize();
+      const side = size.x - box.width > 300;   // room beside the boxes?
+      const phone = isPhone();
+      let tl = phone ? [20, 20] : [40, 40];
+      let br = side
+        ? [Math.min(box.width + 30, size.x * 0.5), 70]
+        : [tl[0], Math.min(box.height + 10, size.y * 0.45)];
+      if (phone) {   // zip fills ~97% of the open area (was 75%; +30%)
+        const fill = 0.975;
+        const ex = (size.x - tl[0] - br[0]) * (1 - fill) / 2, ey = (size.y - tl[1] - br[1]) * (1 - fill) / 2;
+        tl = [tl[0] + ex, tl[1] + ey];
+        br = [br[0] + ex, br[1] + ey];
+      }
+      map.fitBounds(shape.getBounds(), {
+        paddingTopLeft: tl, paddingBottomRight: br, maxZoom: phone ? 13.9 : 15,
+      });
       return;
     }
   } catch (_) { /* fall through to point zoom */ }
-  if (fallback) map.setView(fallback, 13);   // no polygon (e.g. PO-box zip)
+  if (fallback) map.setView(fallback, isPhone() ? 11 : 13);   // no polygon (e.g. PO-box zip)
 }
 
 document.getElementById('search').addEventListener('submit', async e => {
   e.preventDefault();
   const z = document.getElementById('zip').value.trim();
   if (!/^\d{5}$/.test(z)) return;
+  document.getElementById('zip').blur();     // drop the on-screen keyboard
   const r = rows.find(r => r.zip === z);
-  await showBoundary(z, r && [r.lat, r.lon]);
-  openZip(z);
+  if (!r) { alert(`Zip ${z} isn't tracked.`); return; }
+  await showBoundary(z, [r.lat, r.lon]);
 });
 metricSel.addEventListener('change', render);
 
@@ -213,5 +216,7 @@ load();
 connect();
 setInterval(load, 5 * 60 * 1000);  // fallback refresh
 </script>
+<script src="/static/snow.js"></script>
+<script src="/static/trucks.js"></script>
 </body>
 </html>
