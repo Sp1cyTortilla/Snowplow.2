@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snowfall Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: #f6f8fb; --panel: #ffffff; --text: #18202b; --muted: #5b6878;
+    --border: #d9e0e8; --accent: #2563eb; --ok: #16a34a; --warn: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --panel: #18202b; --text: #e6edf5; --muted: #93a1b3;
+      --border: #2a3646; --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  header { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  select, input, button { font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  input { width: 110px; }
+  #status { margin-left: auto; color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+  .dot.live { background: var(--ok); }
+  #map { flex: 1; }
+  .legend { background: var(--panel); color: var(--text); padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); font-size: 12px; line-height: 1.6; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    margin-right: 6px; vertical-align: -2px; border: 1px solid #0003; }
+  .leaflet-popup-content { margin: 10px 12px; min-width: 240px; }
+  .pop h3 { margin: 0 0 2px; font-size: 14px; }
+  .pop .sub { color: #5b6878; font-size: 12px; margin-bottom: 6px; }
+  .pop table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  .pop td { padding: 1px 0; } .pop td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .pop svg { display: block; margin-top: 8px; }
+  .pop .cap { font-size: 11px; color: #5b6878; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>❄ Snowfall Tracker</h1>
+    <div class="controls">
+      <label>Show
+        <select id="metric">
+          <option value="snowfall_24h_in">Snowfall, past 24h</option>
+          <option value="forecast_24h_in">Forecast, next 24h</option>
+          <option value="snowfall_1h_in">Snowfall, last hour</option>
+          <option value="snow_depth_in">Snow depth</option>
+        </select>
+      </label>
+      <form id="search" style="display:flex;gap:6px">
+        <input id="zip" placeholder="Zip code" inputmode="numeric" maxlength="5">
+        <button>Go</button>
+      </form>
+    </div>
+    <div id="status"><span class="dot" id="dot"></span><span id="statusText">Connecting…</span></div>
+  </header>
+  <div id="map"></div>
+</div>
+<script>
+const SCALES = {
+  snowfall_24h_in: [0.1, 1, 3, 6, 12],
+  forecast_24h_in: [0.1, 1, 3, 6, 12],
+  snowfall_1h_in:  [0.01, 0.1, 0.25, 0.5, 1],
+  snow_depth_in:   [0.5, 2, 6, 12, 24],
+};
+const COLORS = ['#c7dcf0', '#8fbde6', '#4f93d6', '#2c5fb8', '#5b2fa6', '#a51d6e'];
+const NONE = '#9aa5b1';
+
+const map = L.map('map', { preferCanvas: true }).setView([44.6, -85.5], 7);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | Snow data: Open-Meteo | Zips: GeoNames',
+  maxZoom: 19,
+}).addTo(map);
+
+const layer = L.layerGroup().addTo(map);
+const highlight = L.layerGroup().addTo(map);   // searched zip outline
+const markers = new Map();
+let rows = [];
+const metricSel = document.getElementById('metric');
+
+function colorFor(v, metric) {
+  if (v == null) return NONE;
+  if (v <= 0) return null;               // nothing falling: draw faint
+  const s = SCALES[metric];
+  let i = 0; while (i < s.length && v >= s[i]) i++;
+  return COLORS[i];
+}
+
+const fmt = v => v == null ? '—' : `${v.toFixed(2)} in`;
+
+function render() {
+  const metric = metricSel.value;
+  for (const r of rows) {
+    const v = r[metric];
+    const c = colorFor(v, metric);
+    const style = c
+      ? { radius: 6, color: '#0004', weight: 1, fillColor: c, fillOpacity: 0.85 }
+      : { radius: 3, color: '#0002', weight: 1, fillColor: '#ffffff', fillOpacity: 0.35 };
+    let m = markers.get(r.zip);
+    if (!m) {
+      m = L.circleMarker([r.lat, r.lon], style).addTo(layer);
+      m.on('click', () => openZip(r.zip));
+      markers.set(r.zip, m);
+    } else m.setStyle(style);
+    m.bindTooltip(`${r.zip} ${r.place}: ${fmt(v)}`);
+  }
+  renderLegend(metric);
+}
+
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = () => L.DomUtil.create('div', 'legend');
+legend.addTo(map);
+function renderLegend(metric) {
+  const s = SCALES[metric];
+  let html = `<b>${metricSel.selectedOptions[0].text}</b><br>`;
+  html += `<i style="background:#fff8"></i>none<br>`;
+  for (let i = 0; i < s.length; i++)
+    html += `<i style="background:${COLORS[i]}"></i>${s[i]}${s[i + 1] ? '–' + s[i + 1] : '+'} in<br>`;
+  legend.getContainer().innerHTML = html;
+}
+
+function sparkline(hourly) {
+  if (!hourly?.length) return '';
+  const W = 260, H = 70, n = hourly.length, bw = W / n;
+  const max = Math.max(0.1, ...hourly.map(h => h[1] || 0));
+  const nowIso = new Date().toISOString().slice(0, 13);
+  let nowX = null, bars = '';
+  hourly.forEach(([t, v], i) => {
+    const h = ((v || 0) / max) * (H - 12);
+    const future = t.slice(0, 13) > nowIso;
+    if (nowX === null && future) nowX = i * bw;
+    bars += `<rect x="${i * bw}" y="${H - h}" width="${Math.max(bw - 0.5, 0.5)}" height="${h}"
+      fill="${future ? '#8fbde6' : '#2c5fb8'}"><title>${t}Z: ${(v || 0).toFixed(2)} in</title></rect>`;
+  });
+  const line = nowX !== null ? `<line x1="${nowX}" x2="${nowX}" y1="0" y2="${H}" stroke="#d97706" stroke-dasharray="3 2"/>` : '';
+  return `<svg width="${W}" height="${H}" role="img" aria-label="Hourly snowfall">${bars}${line}
+    <text x="2" y="10" font-size="10" fill="#5b6878">max ${max.toFixed(2)} in/hr</text></svg>
+    <div class="cap"><span>past 24h</span><span>now</span><span>next 48h</span></div>`;
+}
+
+async function openZip(zip) {
+  const res = await fetch(`/api/zip/${zip}`);
+  if (!res.ok) { alert(`Zip ${zip} isn't tracked.`); return; }
+  const d = await res.json();
+  const html = `<div class="pop"><h3>${d.zip} · ${d.place}</h3>
+    <div class="sub">${d.county} County, ${d.state} · model hour ${d.model_time ?? '—'}Z</div>
+    <table>
+      <tr><td>Snowfall past 24h</td><td>${fmt(d.snowfall_24h_in)}</td></tr>
+      <tr><td>Snowfall last hour</td><td>${fmt(d.snowfall_1h_in)}</td></tr>
+      <tr><td>Forecast next 24h</td><td>${fmt(d.forecast_24h_in)}</td></tr>
+      <tr><td>Snow depth</td><td>${fmt(d.snow_depth_in)}</td></tr>
+    </table>${sparkline(d.hourly)}</div>`;
+  L.popup().setLatLng([d.lat, d.lon]).setContent(html).openOn(map);
+}
+
+async function load() {
+  rows = await (await fetch('/api/zips')).json();
+  render();
+  const s = await (await fetch('/api/status')).json();
+  document.getElementById('statusText').textContent = s.last_update
+    ? `${s.zips} zips · updated ${new Date(s.last_update).toLocaleTimeString()}`
+    : 'Waiting for first collection…';
+}
+
+async function showBoundary(zip, fallback) {
+  highlight.clearLayers();
+  try {
+    const res = await fetch(`/api/zip/${zip}/boundary`);
+    if (res.ok) {
+      const shape = L.geoJSON(await res.json(), {
+        interactive: false,
+        style: { color: '#d97706', weight: 3, fillColor: '#fbbf24', fillOpacity: 0.12 },
+      }).addTo(highlight);
+      map.fitBounds(shape.getBounds(), { padding: [40, 40], maxZoom: 15 });
+      return;
+    }
+  } catch (_) { /* fall through to point zoom */ }
+  if (fallback) map.setView(fallback, 13);   // no polygon (e.g. PO-box zip)
+}
+
+document.getElementById('search').addEventListener('submit', async e => {
+  e.preventDefault();
+  const z = document.getElementById('zip').value.trim();
+  if (!/^\d{5}$/.test(z)) return;
+  const r = rows.find(r => r.zip === z);
+  await showBoundary(z, r && [r.lat, r.lon]);
+  openZip(z);
+});
+metricSel.addEventListener('change', render);
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  const dot = document.getElementById('dot');
+  ws.onopen = () => dot.classList.add('live');
+  ws.onmessage = ev => { if (JSON.parse(ev.data).type === 'update') load(); };
+  ws.onclose = () => { dot.classList.remove('live'); setTimeout(connect, 3000); };
+}
+
+load();
+connect();
+setInterval(load, 5 * 60 * 1000);  // fallback refresh
+</script>
+</body>
+</html>
